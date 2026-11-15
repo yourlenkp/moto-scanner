@@ -1,0 +1,46 @@
+AVISO = "Esta información es solo educativa. Consulta siempre a un mecánico certificado."
+
+catalogo = {
+    "manillar": {
+        "nombre": "Manillar",
+        "sistema": "Suspensión y dirección",
+        "funcion": "Permite al conductor controlar la dirección de la motocicleta.",
+        "mantenimiento": "Revisar que esté bien ajustado, sin daños y que los mandos funcionen correctamente.",
+        "posicion_plano": (0, 1),
+        "imagen": "imagenes_moto/01_manillar.jpeg",
+        "video": "https://www.youtube.com/watch?v=2t8ffQ4_Sz8",
+        "alias": ["manubrio", "volante", "manillar"],
+    },
+    "disco_freno": {
+        "nombre": "Disco de freno",
+        "sistema": "Sistema de frenos",
+        "funcion": "Permite reducir la velocidad y detener la motocicleta mediante la fricción con las pastillas de freno.",
+        "mantenimiento": "Revisar el desgaste, mantenerlo limpio y comprobar que no tenga grietas ni deformaciones.",
+        "posicion_plano": (0, 2),
+        "imagen": "imagenes_moto/02_disco_freno.jpeg",
+        "video": "https://www.youtube.com/watch?v=oQZ_iPN55TU",
+        "video_disco_de_freno_trasero": "https://www.youtube.com/watch?v=oQZ_iPN55TU",
+        "video_disco_de_freno_delantero": "https://www.youtube.com/watch?v=goIH416ZcCk",
+        "alias": ["disco", "freno", "disco delantero", "disco de freno trasero", "disco de freno"],
+    },
+    "piston": {
+        "nombre": "Pistón",
+        "sistema": "Motor",
+        "funcion": "Se mueve dentro del cilindro y transforma la presión de la combustión en movimiento para impulsar el motor.",
+        "mantenimiento": "Utilizar aceite recomendado, cambiarlo periódicamente y revisar el cilindro y los anillos.",
+        "posicion_plano": (0, 3),
+        "imagen": "imagenes_moto/03_piston.jpeg",
+        "video": "https://www.youtube.com/watch?v=w3_t8mNsO6A",
+        "alias": ["piston", "pistón del motor", "embolo"],
+    },
+    "basculante": {
+        "nombre": "Basculante",
+        "sistema": "Chasis y estructura",
+        "funcion": "Conecta la rueda trasera con el chasis y permite su movimiento junto con la suspensión.",
+        "mantenimiento": "Revisar los rodamientos, los puntos de unión y mantener lubricadas las articulaciones.",
+        "posicion_plano": (0, 4),
+        "imagen": "imagenes_moto/04_basculante.jpeg",
+        "video": "https://www.youtube.com/watch?v=7OPpd1YtETA",
+        "alias": ["brazo trasero", "brazo oscilante", "basculante"],
+    },
+}

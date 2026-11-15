@@ -1,0 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+transformers==5.23.0
+faster-whisper==1.2.1
+av==18.0.0
+streamlit>=1.60
+qrcode[pil]>=8.0
+pillow>=10.0
+numpy>=1.26,<3

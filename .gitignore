@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+entorno/
+entorno_roto/
+.streamlit/secrets.toml
+*.wav
