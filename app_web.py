@@ -6,7 +6,7 @@ from pathlib import Path
 import qrcode
 import streamlit as st
 import torch
-from PIL import Image
+from PIL import Image, ImageOps
 from faster_whisper import WhisperModel
 from transformers import CLIPModel, CLIPProcessor
 
@@ -18,12 +18,48 @@ MODELO_CLIP = "openai/clip-vit-base-patch32"
 CLAVES = list(catalogo.keys())
 
 DESCRIPCIONES = {
-    "manillar": "a motorcycle handlebar, the steering bar with grips and controls",
-    "disco_freno": "a motorcycle brake disc rotor, a round metal brake disk",
-    "piston": "a motorcycle engine piston, a metal piston with rings",
-    "basculante": "a motorcycle swingarm, the rear suspension arm holding the wheel",
+    "manillar": [
+        "a close-up of a motorcycle handlebar with grips and controls",
+        "the metal steering bar of a motorcycle",
+        "motorcycle handlebars and mirrors",
+    ],
+    "disco_freno": [
+        "a close-up of a motorcycle brake disc rotor",
+        "a shiny round metal brake disk with drilled holes",
+        "a motorcycle front brake rotor mounted on the wheel",
+        "a metal brake disc next to the brake caliper",
+    ],
+    "piston": [
+        "a motorcycle engine piston with piston rings",
+        "a close-up of a metal piston inside a cylinder",
+        "a shiny cylindrical engine piston",
+    ],
+    "basculante": [
+        "a motorcycle swingarm holding the rear wheel",
+        "the rear metal arm of a motorcycle chassis",
+        "a close-up of a motorcycle swingarm with chain and sprocket",
+    ],
+    "motor": [
+        "a motorcycle engine block",
+        "a close-up of a motorcycle engine with cylinders and cooling fins",
+        "the engine of a motorcycle",
+    ],
+    "amortiguador": [
+        "a motorcycle rear shock absorber",
+        "a close-up of a motorcycle suspension spring and shock",
+        "a motorcycle suspension damper",
+    ],
+    "tubo_escape": [
+        "a motorcycle exhaust pipe and muffler",
+        "a close-up of a metal motorcycle exhaust",
+        "the exhaust system of a motorcycle",
+    ],
+    "tacometro": [
+        "a motorcycle tachometer gauge showing RPM",
+        "a close-up of a motorcycle dashboard with a tachometer",
+        "a round motorcycle gauge with a needle",
+    ],
 }
-TEXTOS = [DESCRIPCIONES[clave] for clave in CLAVES]
 
 
 def _features(salida):
@@ -37,48 +73,75 @@ def cargar_clip():
     procesador = CLIPProcessor.from_pretrained(MODELO_CLIP)
     modelo.eval()
     with torch.no_grad():
-        entradas = procesador(text=TEXTOS, return_tensors="pt", padding=True)
-        texto = _features(modelo.get_text_features(**entradas))
-        texto = texto / texto.norm(dim=-1, keepdim=True)
+        textos = []
+        for clave in CLAVES:
+            ent = procesador(text=DESCRIPCIONES[clave], return_tensors="pt", padding=True)
+            emb = _features(modelo.get_text_features(**ent))
+            emb = emb / emb.norm(dim=-1, keepdim=True)
+            emb = emb.mean(dim=0, keepdim=True)
+            emb = emb / emb.norm(dim=-1, keepdim=True)
+            textos.append(emb)
+        texto = torch.cat(textos, dim=0)
         referencias = []
         for clave in CLAVES:
-            ruta = BASE / catalogo[clave]["imagen"]
-            if ruta.exists():
+            ficha = catalogo[clave]
+            rutas = []
+            carpeta = BASE / "imagenes_moto" / "referencias" / clave
+            if carpeta.exists():
+                for ruta in sorted(carpeta.iterdir()):
+                    if ruta.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                        rutas.append(ruta)
+            if ficha.get("imagen"):
+                ruta = BASE / ficha["imagen"]
+                if ruta.exists() and ruta not in rutas:
+                    rutas.append(ruta)
+            embs = []
+            for ruta in rutas:
                 imagen = Image.open(ruta).convert("RGB")
-                ent = procesador(images=imagen, return_tensors="pt")
-                referencia = _features(modelo.get_image_features(**ent))
-                referencia = referencia / referencia.norm(dim=-1, keepdim=True)
-                referencias.append(referencia)
-            else:
-                referencias.append(None)
+                for img in (imagen, ImageOps.mirror(imagen)):
+                    ent = procesador(images=img, return_tensors="pt")
+                    emb = _features(modelo.get_image_features(**ent))
+                    emb = emb / emb.norm(dim=-1, keepdim=True)
+                    embs.append(emb)
+            referencias.append(embs)
     return modelo, procesador, texto, referencias
 
 
 @st.cache_resource(show_spinner="Cargando Whisper...")
 def cargar_whisper():
-    return WhisperModel("base", device="cpu", compute_type="int8")
+    return WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=2)
 
 
 @st.cache_data(show_spinner=False)
 def clasificar_imagen_bytes(datos):
     modelo, procesador, texto, referencias = cargar_clip()
     imagen = Image.open(io.BytesIO(datos)).convert("RGB")
+    ancho, alto = imagen.size
+    recorte = imagen.crop((int(ancho * 0.08), int(alto * 0.08), int(ancho * 0.92), int(alto * 0.92)))
+    variantes = [imagen, ImageOps.mirror(imagen), recorte]
     with torch.no_grad():
-        ent = procesador(images=imagen, return_tensors="pt")
-        imagen_emb = _features(modelo.get_image_features(**ent))
+        embs = []
+        for variante in variantes:
+            ent = procesador(images=variante, return_tensors="pt")
+            emb = _features(modelo.get_image_features(**ent))
+            emb = emb / emb.norm(dim=-1, keepdim=True)
+            embs.append(emb)
+        imagen_emb = torch.cat(embs, dim=0).mean(dim=0, keepdim=True)
         imagen_emb = imagen_emb / imagen_emb.norm(dim=-1, keepdim=True)
         prob_texto = (modelo.logit_scale.exp() * (imagen_emb @ texto.T)).softmax(dim=-1)[0]
-        if any(referencia is not None for referencia in referencias):
-            similitudes = []
-            for referencia in referencias:
-                if referencia is None:
-                    similitudes.append(torch.tensor(0.0))
-                else:
-                    similitudes.append((imagen_emb @ referencia.T).max())
-            prob_ref = (torch.stack(similitudes) * 60).softmax(dim=0)
-            prob = 0.5 * prob_ref + 0.5 * prob_texto
-        else:
-            prob = prob_texto
+        prob = prob_texto.clone()
+        indices = [i for i, refs in enumerate(referencias) if refs]
+        if indices:
+            sims = torch.stack(
+                [(imagen_emb @ torch.cat(referencias[i], dim=0).T).max() for i in indices]
+            )
+            max_sim = float(sims.max())
+            if max_sim >= 0.22:
+                prob_ref = (sims * 60).softmax(dim=0)
+                peso = min(0.85, max(0.0, (max_sim - 0.22) / 0.25 * 0.85))
+                for pos, i in enumerate(indices):
+                    prob[i] = (1 - peso) * prob_texto[i] + peso * prob_ref[pos]
+                prob = prob / prob.sum()
     orden = torch.argsort(prob, descending=True)
     top = [(CLAVES[int(i)], float(prob[int(i)])) for i in orden[:3]]
     return CLAVES[int(orden[0])], float(prob[int(orden[0])]), top
@@ -117,14 +180,18 @@ def mostrar_ficha(clave, confianza=None, top=None):
     ficha = catalogo[clave]
     izquierda, derecha = st.columns([1, 2])
     with izquierda:
-        ruta = BASE / ficha["imagen"]
-        if ruta.exists():
+        ruta = BASE / ficha["imagen"] if ficha.get("imagen") else None
+        if ruta and ruta.exists():
             st.image(str(ruta))
+        else:
+            st.info("Imagen de referencia pendiente.")
     with derecha:
         st.subheader(ficha["nombre"])
         if confianza is not None:
             st.metric("Confianza", f"{confianza:.0f}%")
             st.progress(max(0.0, min(confianza / 100, 1.0)))
+            if confianza < 50:
+                st.warning("La app no está segura. Prueba con una foto más cercana o elige la pieza manualmente.")
         st.write(f"**Sistema:** {ficha['sistema']}")
         st.write(f"**Función:** {ficha['funcion']}")
         st.write(f"**Mantenimiento:** {ficha['mantenimiento']}")
@@ -132,9 +199,9 @@ def mostrar_ficha(clave, confianza=None, top=None):
         for i, enlace in enumerate(enlaces, 1):
             etiqueta = "Ver video" if len(enlaces) == 1 else f"Ver video {i}"
             st.link_button(etiqueta, enlace)
-        if top and len(top) > 1:
-            with st.expander("Otras coincidencias"):
-                for nombre, probabilidad in top[1:]:
+        if top:
+            with st.expander("Ver las 3 mejores coincidencias", expanded=confianza is not None and confianza < 50):
+                for nombre, probabilidad in top:
                     st.write(f"{catalogo[nombre]['nombre']}: {probabilidad * 100:.1f}%")
     st.caption(AVISO)
 
@@ -147,6 +214,7 @@ tab_camara, tab_voz, tab_qr = st.tabs(["Cámara", "Voz", "Enlace y QR"])
 
 with tab_camara:
     st.subheader("Reconoce una pieza por foto")
+    st.caption("Consejo: llena el encuadre con la pieza, con buena luz y sin otras piezas alrededor.")
     foto = st.camera_input("Toma una foto")
     archivo = st.file_uploader("O sube una imagen", type=["jpg", "jpeg", "png", "webp"])
     datos = archivo.getvalue() if archivo else (foto.getvalue() if foto else None)
@@ -159,8 +227,6 @@ with tab_camara:
                 except Exception as error:
                     st.error(f"No pude analizar la imagen: {error}")
                 else:
-                    if confianza < 50:
-                        st.warning("La coincidencia es baja. Prueba con otra foto o elige la pieza manualmente.")
                     mostrar_ficha(clave, confianza, top)
     st.divider()
     seleccion = st.selectbox(
@@ -188,7 +254,7 @@ with tab_voz:
             if clave:
                 mostrar_ficha(clave)
             else:
-                st.warning("No reconocí la pieza. Prueba decir: manillar, disco de freno, pistón o basculante.")
+                st.warning("No reconocí la pieza. Prueba decir: manillar, disco de freno, pistón, basculante, motor, amortiguador, escape o tacómetro.")
         else:
             st.info("No se detectó voz. Intenta grabar de nuevo.")
     st.divider()
@@ -228,6 +294,12 @@ with st.sidebar:
     for clave in CLAVES:
         st.write(f"- {catalogo[clave]['nombre']}")
     st.divider()
+    with st.expander("¿Cómo mejorar el reconocimiento?"):
+        st.write("Acerca la cámara para que la pieza ocupe la mayor parte de la foto.")
+        st.write("Usa buena luz y evita que aparezcan otras piezas alrededor.")
+        st.write("Con más fotos reales de referencia, el porcentaje de confianza sube.")
+        st.write("El porcentaje es la probabilidad del modelo; si es bajo, usa el selector manual.")
+    st.divider()
     st.write("La primera vez que uses la cámara o la voz, la app descarga los modelos. Puede tardar un poco.")
     st.divider()
-    st.caption("Hecho para aprender mecánica básica de moto.")
+    st.caption("Imágenes de referencia generadas con IA; la foto real del disco es de Wikimedia Commons (dominio público).")
