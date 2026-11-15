@@ -16,6 +16,19 @@ from comun import buscar, videos
 BASE = Path(__file__).resolve().parent
 MODELO_CLIP = "openai/clip-vit-base-patch32"
 CLAVES = list(catalogo.keys())
+ALPHA_REFERENCIA = 20.0
+TOP_K_REFERENCIA = 3
+CREDITOS = [
+    "Manillar: Alexa Wirth, CC0.",
+    "Disco de freno: Aprilia disc brake (dominio público); Ildar Sagdejev, CC BY-SA 4.0; Brianhe, CC BY-SA 4.0; Malsa, CC BY-SA 1.0.",
+    "Pistón: TuckerBag (dominio público); Honda CB77 Restoration, CC BY 2.0.",
+    "Basculante: A7N8X / Auge=mit, CC BY-SA 3.0.",
+    "Motor: Yanko Malinov, CC BY-SA 4.0; Paul The Writer, CC0; Khaosaming, CC BY-SA 3.0.",
+    "Amortiguador: Dennis Bratland, CC BY-SA 4.0; Andy Carter, CC BY 2.0.",
+    "Tubo de escape: Microrao, CC BY-SA 4.0; Franken-Guzzista, CC BY-SA 4.0.",
+    "Tacómetro: Piero (Wikipedia), dominio público; Centovalli, CC BY-SA 3.0; Ildar Sagdejev, CC BY-SA 4.0.",
+    "Licencias: creativecommons.org/licenses (CC0, CC BY y CC BY-SA).",
+]
 
 DESCRIPCIONES = {
     "manillar": [
@@ -84,17 +97,12 @@ def cargar_clip():
         texto = torch.cat(textos, dim=0)
         referencias = []
         for clave in CLAVES:
-            ficha = catalogo[clave]
             rutas = []
             carpeta = BASE / "imagenes_moto" / "referencias" / clave
             if carpeta.exists():
                 for ruta in sorted(carpeta.iterdir()):
                     if ruta.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
                         rutas.append(ruta)
-            if ficha.get("imagen"):
-                ruta = BASE / ficha["imagen"]
-                if ruta.exists() and ruta not in rutas:
-                    rutas.append(ruta)
             embs = []
             for ruta in rutas:
                 imagen = Image.open(ruta).convert("RGB")
@@ -132,16 +140,18 @@ def clasificar_imagen_bytes(datos):
         prob = prob_texto.clone()
         indices = [i for i, refs in enumerate(referencias) if refs]
         if indices:
-            sims = torch.stack(
-                [(imagen_emb @ torch.cat(referencias[i], dim=0).T).max() for i in indices]
-            )
-            max_sim = float(sims.max())
-            if max_sim >= 0.22:
-                prob_ref = (sims * 60).softmax(dim=0)
-                peso = min(0.85, max(0.0, (max_sim - 0.22) / 0.25 * 0.85))
-                for pos, i in enumerate(indices):
-                    prob[i] = (1 - peso) * prob_texto[i] + peso * prob_ref[pos]
-                prob = prob / prob.sum()
+            sims = []
+            for i in indices:
+                similitudes = (imagen_emb @ torch.cat(referencias[i], dim=0).T)[0]
+                k = min(TOP_K_REFERENCIA, similitudes.numel())
+                sims.append(torch.topk(similitudes, k).values.mean())
+            sims = torch.stack(sims)
+            sims_todas = torch.full((len(CLAVES),), float(sims.min()))
+            for pos, i in enumerate(indices):
+                sims_todas[i] = sims[pos]
+            factores = torch.exp(ALPHA_REFERENCIA * (sims_todas - sims_todas.max()))
+            prob = prob_texto * factores
+            prob = prob / prob.sum()
     orden = torch.argsort(prob, descending=True)
     top = [(CLAVES[int(i)], float(prob[int(i)])) for i in orden[:3]]
     return CLAVES[int(orden[0])], float(prob[int(orden[0])]), top
@@ -183,14 +193,16 @@ def mostrar_ficha(clave, confianza=None, top=None):
         ruta = BASE / ficha["imagen"] if ficha.get("imagen") else None
         if ruta and ruta.exists():
             st.image(str(ruta))
+            if ficha.get("credito"):
+                st.caption(f"Imagen: {ficha['credito']}")
         else:
             st.info("Imagen de referencia pendiente.")
     with derecha:
         st.subheader(ficha["nombre"])
         if confianza is not None:
-            st.metric("Confianza", f"{confianza:.0f}%")
-            st.progress(max(0.0, min(confianza / 100, 1.0)))
-            if confianza < 50:
+            st.metric("Confianza", f"{confianza * 100:.0f}%")
+            st.progress(max(0.0, min(confianza, 1.0)))
+            if confianza < 0.5:
                 st.warning("La app no está segura. Prueba con una foto más cercana o elige la pieza manualmente.")
         st.write(f"**Sistema:** {ficha['sistema']}")
         st.write(f"**Función:** {ficha['funcion']}")
@@ -200,7 +212,7 @@ def mostrar_ficha(clave, confianza=None, top=None):
             etiqueta = "Ver video" if len(enlaces) == 1 else f"Ver video {i}"
             st.link_button(etiqueta, enlace)
         if top:
-            with st.expander("Ver las 3 mejores coincidencias", expanded=confianza is not None and confianza < 50):
+            with st.expander("Ver las 3 mejores coincidencias", expanded=confianza is not None and confianza < 0.5):
                 for nombre, probabilidad in top:
                     st.write(f"{catalogo[nombre]['nombre']}: {probabilidad * 100:.1f}%")
     st.caption(AVISO)
@@ -302,4 +314,7 @@ with st.sidebar:
     st.divider()
     st.write("La primera vez que uses la cámara o la voz, la app descarga los modelos. Puede tardar un poco.")
     st.divider()
-    st.caption("Imágenes de referencia generadas con IA; la foto real del disco es de Wikimedia Commons (dominio público).")
+    with st.expander("Créditos de imágenes"):
+        for credito in CREDITOS:
+            st.write(credito)
+    st.caption("Fichas 1–4 generadas con IA; fotos reales de Wikimedia Commons con sus créditos.")
