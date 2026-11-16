@@ -18,6 +18,10 @@ MODELO_CLIP = "openai/clip-vit-base-patch32"
 CLAVES = list(catalogo.keys())
 ALPHA_REFERENCIA = 20.0
 TOP_K_REFERENCIA = 3
+UMBRAL_SIMILITUD_DESCONOCIDO = 0.65
+UMBRAL_MARGEN_AMBIGUO = 0.10
+UMBRAL_CONFIANZA_AMBIGUO = 0.50
+UMBRAL_SIMILITUD_AMBIGUO = 0.80
 CREDITOS = [
     "Manillar: Alexa Wirth, CC0.",
     "Disco de freno: Aprilia disc brake (dominio público); Ildar Sagdejev, CC BY-SA 4.0; Brianhe, CC BY-SA 4.0; Malsa, CC BY-SA 1.0.",
@@ -27,6 +31,7 @@ CREDITOS = [
     "Amortiguador: Dennis Bratland, CC BY-SA 4.0; Andy Carter, CC BY 2.0.",
     "Tubo de escape: Microrao, CC BY-SA 4.0; Franken-Guzzista, CC BY-SA 4.0.",
     "Tacómetro: Piero (Wikipedia), dominio público; Centovalli, CC BY-SA 3.0; Ildar Sagdejev, CC BY-SA 4.0.",
+    "Referencias adicionales aportadas por el usuario.",
     "Licencias: creativecommons.org/licenses (CC0, CC BY y CC BY-SA).",
 ]
 
@@ -81,6 +86,9 @@ def _features(salida):
 
 @st.cache_resource(show_spinner="Cargando CLIP...")
 def cargar_clip():
+    faltantes = [clave for clave in CLAVES if not DESCRIPCIONES.get(clave)]
+    if faltantes:
+        raise ValueError("Faltan descripciones para: " + ", ".join(faltantes))
     torch.set_num_threads(2)
     modelo = CLIPModel.from_pretrained(MODELO_CLIP)
     procesador = CLIPProcessor.from_pretrained(MODELO_CLIP)
@@ -96,6 +104,8 @@ def cargar_clip():
             textos.append(emb)
         texto = torch.cat(textos, dim=0)
         referencias = []
+        errores = []
+        sin_referencias = []
         for clave in CLAVES:
             rutas = []
             carpeta = BASE / "imagenes_moto" / "referencias" / clave
@@ -105,13 +115,24 @@ def cargar_clip():
                         rutas.append(ruta)
             embs = []
             for ruta in rutas:
-                imagen = Image.open(ruta).convert("RGB")
+                try:
+                    with Image.open(ruta) as original:
+                        imagen = ImageOps.exif_transpose(original).convert("RGB")
+                except Exception as error:
+                    errores.append(f"{ruta.name}: {error}")
+                    continue
                 for img in (imagen, ImageOps.mirror(imagen)):
                     ent = procesador(images=img, return_tensors="pt")
                     emb = _features(modelo.get_image_features(**ent))
                     emb = emb / emb.norm(dim=-1, keepdim=True)
                     embs.append(emb)
+            if not embs:
+                sin_referencias.append(clave)
             referencias.append(embs)
+    if errores:
+        st.warning("No se pudieron cargar algunas referencias: " + "; ".join(errores))
+    if sin_referencias:
+        st.warning("Estas piezas no tienen referencias válidas: " + ", ".join(sin_referencias))
     return modelo, procesador, texto, referencias
 
 
@@ -123,7 +144,8 @@ def cargar_whisper():
 @st.cache_data(show_spinner=False)
 def clasificar_imagen_bytes(datos):
     modelo, procesador, texto, referencias = cargar_clip()
-    imagen = Image.open(io.BytesIO(datos)).convert("RGB")
+    with Image.open(io.BytesIO(datos)) as original:
+        imagen = ImageOps.exif_transpose(original).convert("RGB")
     ancho, alto = imagen.size
     recorte = imagen.crop((int(ancho * 0.08), int(alto * 0.08), int(ancho * 0.92), int(alto * 0.92)))
     variantes = [imagen, ImageOps.mirror(imagen), recorte]
@@ -138,6 +160,7 @@ def clasificar_imagen_bytes(datos):
         imagen_emb = imagen_emb / imagen_emb.norm(dim=-1, keepdim=True)
         prob_texto = (modelo.logit_scale.exp() * (imagen_emb @ texto.T)).softmax(dim=-1)[0]
         prob = prob_texto.clone()
+        similitud_maxima = None
         indices = [i for i, refs in enumerate(referencias) if refs]
         if indices:
             sims = []
@@ -146,15 +169,24 @@ def clasificar_imagen_bytes(datos):
                 k = min(TOP_K_REFERENCIA, similitudes.numel())
                 sims.append(torch.topk(similitudes, k).values.mean())
             sims = torch.stack(sims)
-            sims_todas = torch.full((len(CLAVES),), float(sims.min()))
+            similitud_maxima = float(sims.max())
+            factores = torch.ones(len(CLAVES))
             for pos, i in enumerate(indices):
-                sims_todas[i] = sims[pos]
-            factores = torch.exp(ALPHA_REFERENCIA * (sims_todas - sims_todas.max()))
+                factores[i] = torch.exp(ALPHA_REFERENCIA * (sims[pos] - similitud_maxima))
             prob = prob_texto * factores
             prob = prob / prob.sum()
     orden = torch.argsort(prob, descending=True)
     top = [(CLAVES[int(i)], float(prob[int(i)])) for i in orden[:3]]
-    return CLAVES[int(orden[0])], float(prob[int(orden[0])]), top
+    confianza = float(prob[int(orden[0])])
+    if similitud_maxima is not None:
+        margen = confianza - float(prob[int(orden[1])])
+        if similitud_maxima < UMBRAL_SIMILITUD_DESCONOCIDO or (
+            margen < UMBRAL_MARGEN_AMBIGUO
+            and confianza < UMBRAL_CONFIANZA_AMBIGUO
+            and similitud_maxima < UMBRAL_SIMILITUD_AMBIGUO
+        ):
+            return None, confianza, top
+    return CLAVES[int(orden[0])], confianza, top
 
 
 @st.cache_data(show_spinner=False)
@@ -186,6 +218,11 @@ def qr_png(url):
     return buffer.getvalue()
 
 
+def mostrar_candidatos(top):
+    for nombre, probabilidad in top:
+        st.write(f"{catalogo[nombre]['nombre']}: {probabilidad * 100:.1f}%")
+
+
 def mostrar_ficha(clave, confianza=None, top=None):
     ficha = catalogo[clave]
     izquierda, derecha = st.columns([1, 2])
@@ -213,8 +250,7 @@ def mostrar_ficha(clave, confianza=None, top=None):
             st.link_button(etiqueta, enlace)
         if top:
             with st.expander("Ver las 3 mejores coincidencias", expanded=confianza is not None and confianza < 0.5):
-                for nombre, probabilidad in top:
-                    st.write(f"{catalogo[nombre]['nombre']}: {probabilidad * 100:.1f}%")
+                mostrar_candidatos(top)
     st.caption(AVISO)
 
 
@@ -239,7 +275,14 @@ with tab_camara:
                 except Exception as error:
                     st.error(f"No pude analizar la imagen: {error}")
                 else:
-                    mostrar_ficha(clave, confianza, top)
+                    if clave is None:
+                        st.warning(
+                            "No reconocí una pieza del catálogo. Prueba con una foto más cercana o elige la pieza manualmente."
+                        )
+                        with st.expander("Ver las 3 mejores coincidencias", expanded=True):
+                            mostrar_candidatos(top)
+                    else:
+                        mostrar_ficha(clave, confianza, top)
     st.divider()
     seleccion = st.selectbox(
         "O elige la pieza manualmente",
@@ -317,4 +360,4 @@ with st.sidebar:
     with st.expander("Créditos de imágenes"):
         for credito in CREDITOS:
             st.write(credito)
-    st.caption("Fichas 1–4 generadas con IA; fotos reales de Wikimedia Commons con sus créditos.")
+    st.caption("Fichas 1–8 ilustrativas; referencias de Wikimedia Commons y aportadas por el usuario.")
