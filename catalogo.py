@@ -52,6 +52,7 @@ catalogo = {
         "imagen": "imagenes_moto/06_motor.png",
         "credito": "Infografía del proyecto.",
         "video": "https://www.youtube.com/watch?v=43ocgJqupzQ",
+        "video_instalacion": "https://www.youtube.com/watch?v=AgZQ7RA72bA",
         "alias": ["motor", "bloque del motor", "motor de la moto"],
     },
     "amortiguador": {
@@ -63,6 +64,7 @@ catalogo = {
         "imagen": "imagenes_moto/05_amortiguador.png",
         "credito": "Infografía del proyecto.",
         "video": "https://www.youtube.com/watch?v=Myl0u7OwkZU",
+        "video_instalacion": "https://www.youtube.com/watch?v=K7itezAceWc",
         "alias": ["amortiguador", "suspensión", "suspensión trasera", "monoshock", "amortiguador trasero"],
     },
     "tubo_escape": {
@@ -74,6 +76,7 @@ catalogo = {
         "imagen": "imagenes_moto/08_tubo_de_escape.png",
         "credito": "Infografía del proyecto.",
         "video": "https://www.youtube.com/watch?v=ie6j8JijEkc",
+        "video_instalacion": "https://www.youtube.com/watch?v=leTnxqU8DO4",
         "alias": ["tubo de escape", "tubo", "escape", "exosto", "silenciador", "mofle"],
     },
     "tacometro": {
@@ -85,6 +88,7 @@ catalogo = {
         "imagen": "imagenes_moto/07_tacometro.png",
         "credito": "Infografía del proyecto.",
         "video": "https://www.youtube.com/watch?v=_dH8EzlzgKw",
+        "video_instalacion": "https://www.youtube.com/watch?v=zLWfdQ9VJ3s",
         "alias": ["tacómetro", "tacometro", "cuentarrevoluciones", "medidor de rpm", "rpm"],
     },
 }

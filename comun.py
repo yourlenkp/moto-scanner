@@ -107,9 +107,15 @@ def buscar(frase):
     return None
 
 
-def videos(ficha):
+def videos_etiquetados(ficha):
     vistos = []
+    urls = set()
     for campo, valor in ficha.items():
-        if campo.startswith("video") and isinstance(valor, str) and valor not in vistos:
-            vistos.append(valor)
+        if campo.startswith("video") and isinstance(valor, str) and valor not in urls:
+            vistos.append((campo, valor))
+            urls.add(valor)
     return vistos
+
+
+def videos(ficha):
+    return [enlace for _, enlace in videos_etiquetados(ficha)]

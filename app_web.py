@@ -1,3 +1,4 @@
+import importlib
 import io
 import os
 import tempfile
@@ -10,8 +11,14 @@ from PIL import Image, ImageOps
 from faster_whisper import WhisperModel
 from transformers import CLIPModel, CLIPProcessor
 
+import catalogo as modulo_catalogo
+import comun as modulo_comun
+
+importlib.reload(modulo_catalogo)
+importlib.reload(modulo_comun)
+
 from catalogo import AVISO, catalogo
-from comun import buscar, videos
+from comun import buscar, videos_etiquetados
 
 BASE = Path(__file__).resolve().parent
 MODELO_CLIP = "openai/clip-vit-base-patch32"
@@ -22,6 +29,10 @@ UMBRAL_SIMILITUD_DESCONOCIDO = 0.65
 UMBRAL_MARGEN_AMBIGUO = 0.10
 UMBRAL_CONFIANZA_AMBIGUO = 0.50
 UMBRAL_SIMILITUD_AMBIGUO = 0.80
+ETIQUETAS_VIDEO = {
+    "video": "Ver video",
+    "video_instalacion": "Ver video de instalación",
+}
 CREDITOS = [
     "Manillar: Alexa Wirth, CC0.",
     "Disco de freno: Aprilia disc brake (dominio público); Ildar Sagdejev, CC BY-SA 4.0; Brianhe, CC BY-SA 4.0; Malsa, CC BY-SA 1.0.",
@@ -244,9 +255,11 @@ def mostrar_ficha(clave, confianza=None, top=None):
         st.write(f"**Sistema:** {ficha['sistema']}")
         st.write(f"**Función:** {ficha['funcion']}")
         st.write(f"**Mantenimiento:** {ficha['mantenimiento']}")
-        enlaces = videos(ficha)
-        for i, enlace in enumerate(enlaces, 1):
-            etiqueta = "Ver video" if len(enlaces) == 1 else f"Ver video {i}"
+        for campo, enlace in videos_etiquetados(ficha):
+            etiqueta = ETIQUETAS_VIDEO.get(campo)
+            if etiqueta is None:
+                detalle = campo.removeprefix("video_").replace("_", " ")
+                etiqueta = f"Ver video: {detalle}"
             st.link_button(etiqueta, enlace)
         if top:
             with st.expander("Ver las 3 mejores coincidencias", expanded=confianza is not None and confianza < 0.5):
